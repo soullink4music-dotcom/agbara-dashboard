@@ -375,8 +375,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
     <div class="sechd"><span class="sect" id="todayTitle">Events</span><span class="secc" id="todayCount"></span></div>
     <div id="todayList"></div>
     <div class="gap"></div>
-    <div class="sechd"><span class="sect">🔁 Repeat Fires — Selected Day</span><span class="secc" id="repCount"></span></div>
+    <div class="sechd"><span class="sect">🔁 Same-Day Fires (3+)</span><span class="secc" id="repCount"></span></div>
     <div id="repList"></div>
+    <div class="gap"></div>
+    <div id="weeklyRepSection" style="display:none">
+      <div class="sechd"><span class="sect">↩️ Recurring This Week</span><span class="secc" id="weeklyRepCount"></span></div>
+      <div style="font-size:11px;color:#64748B;margin-bottom:8px">Same machine + fault appeared in the prior 7 days — root cause may not be fixed</div>
+      <div id="weeklyRepList"></div>
+    </div>
   </div>
 
   <!-- PAGE: MONTH -->
@@ -429,7 +435,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
 <!-- NAV -->
 <nav class="nav" id="nav" style="display:none">
   <button class="nbtn active" onclick="showPage('today',this)">
-    <span class="ic">📅</span>Today<span class="bdg" id="bdgToday" style="display:none"></span>
+    <span class="ic">📅</span>Today
+    <span class="bdg" id="bdgToday"  style="display:none"></span>
+    <span class="bdg" id="bdgWeekly" style="display:none;background:#F97316"></span>
   </button>
   <button class="nbtn" onclick="showPage('month',this)">
     <span class="ic">📊</span>Month
@@ -778,8 +786,35 @@ function buildDataset(rows) {
     });
   });
 
+  // Weekly repeats: same lm+failMode within prior 7 days of each event's day
+  const weeklyRepeats = {};
+  for (const d of availDays) {
+    const found = [];
+    const seen  = {};
+    for (const r of (byDay[d]||[])) {
+      const k = r.lineMachine + '||' + r.failMode;
+      if (seen[k]) continue;
+      seen[k] = true;
+      let lastDay = null;
+      for (let pd = d-1; pd >= d-7; pd--) {
+        if (!byDay[pd]) continue;
+        const hit = byDay[pd].find(function(pr){
+          return pr.lineMachine === r.lineMachine && pr.failMode === r.failMode;
+        });
+        if (hit) { lastDay = pd; break; }
+      }
+      if (lastDay !== null) {
+        const daysSince = d - lastDay;
+        found.push({lm:r.lineMachine, fm:r.failMode, line:r.line,
+          lastDay:lastDay, daysSince:daysSince,
+          priority: daysSince <= 3 ? 'critical' : 'warning'});
+      }
+    }
+    weeklyRepeats[d] = found.sort(function(a,b){ return a.daysSince - b.daysSince; });
+  }
+
   return {
-    availDays, byDay, dayRepeats, monthRepeats,
+    availDays, byDay, dayRepeats, monthRepeats, weeklyRepeats,
     lines, machines, failures, spares, spareLog,
     shiftData: Object.values(shm),
     tradeData: Object.values(tm),
@@ -802,7 +837,11 @@ function buildDaySelector() {
     return `<div class="day-pill${d===SEL_DAY?' active':''}${isToday?' today-pill':''}${reps?' has-repeats':''}"
       id="dp-${d}" onclick="selectDay(${d})">
       <div class="dp-num">${d}</div>
-      <div class="dp-dot"></div>
+      <div style="display:flex;gap:2px;justify-content:center;margin-top:2px">
+        ${reps  ? '<div class="dp-dot"></div>' : ''}
+        ${wkly && !reps ? '<div style="width:4px;height:4px;border-radius:50%;background:#F97316"></div>' : ''}
+        ${wkly && reps  ? '<div style="width:4px;height:4px;border-radius:50%;background:#F97316"></div>' : ''}
+      </div>
       <div class="dp-ev">${evCount>0?evCount+'ev':'-'}</div>
     </div>`;
   }).join('');
@@ -859,14 +898,23 @@ function updateHeader() {
     `<b>${label}</b> · ${D.totalEv} events this month · ${D.totalHrs.toFixed(1)} hrs DT`;
 
   // Alert: repeat fires on selected day
-  const reps = DATA.dayRepeats[SEL_DAY] || [];
+  const reps  = DATA.dayRepeats[SEL_DAY]  || [];
+  const wkRep = (DATA.weeklyRepeats && DATA.weeklyRepeats[SEL_DAY]) || [];
   const ab = document.getElementById('alertBanner');
+  var bannerHtml = '';
   if (reps.length) {
-    ab.innerHTML = `<div class="alert-bar">
-      <div class="alert-txt">🚨 ${reps.length} machine${reps.length>1?'s':''} fired 3+ times on Day ${SEL_DAY}</div>
-      <div class="alert-n">${reps.length}</div>
-    </div>`;
-  } else ab.innerHTML = '';
+    bannerHtml += '<div class="alert-bar">'
+      +'<div class="alert-txt">🚨 ' + reps.length + ' machine' + (reps.length>1?'s':'') + ' fired 3+ times on Day ' + SEL_DAY + '</div>'
+      +'<div class="alert-n">' + reps.length + '</div>'
+    +'</div>';
+  }
+  if (wkRep.length) {
+    bannerHtml += '<div class="alert-bar" style="background:#F97316;margin-top:4px">'
+      +'<div class="alert-txt">⚠️ ' + wkRep.length + ' fault' + (wkRep.length>1?'s':'') + ' recurring within 7 days</div>'
+      +'<div class="alert-n">' + wkRep.length + '</div>'
+    +'</div>';
+  }
+  ab.innerHTML = bannerHtml;
 }
 
 // ══ RENDER: TODAY (selected day) ════════════════════════
@@ -961,6 +1009,43 @@ function renderToday() {
   // Repeat fires
   document.getElementById('repCount').textContent =
     filtReps.length ? `${filtReps.length} machine${filtReps.length>1?'s':''}` : 'None ✅';
+
+  // Weekly repeat section
+  const wkReps = ((DATA.weeklyRepeats && DATA.weeklyRepeats[SEL_DAY]) || []).filter(function(r) {
+    if (FILTER === 'Packaging') {
+      var evs = allDayRows.filter(function(e){ return e.lineMachine===r.lm && e.failMode===r.fm; });
+      return evs.some(function(e){ return e.category==='Packaging'; });
+    }
+    if (FILTER === 'Process') {
+      var evs = allDayRows.filter(function(e){ return e.lineMachine===r.lm && e.failMode===r.fm; });
+      return evs.some(function(e){ return e.category==='Process'; });
+    }
+    return true;
+  });
+  badge('bdgWeekly', wkReps.length);
+  var wkEl = document.getElementById('weeklyRepSection');
+  if (wkEl) {
+    if (wkReps.length) {
+      wkEl.style.display = 'block';
+      document.getElementById('weeklyRepCount').textContent = wkReps.length + ' pattern' + (wkReps.length>1?'s':'');
+      document.getElementById('weeklyRepList').innerHTML = wkReps.map(function(r) {
+        var lc = LCOL[r.line] || '#F97316';
+        var urgency = r.priority === 'critical'
+          ? '<span style="display:inline-block;margin-top:4px;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#FEF2F2;color:#EF4444">🔴 Back in ' + r.daysSince + ' day' + (r.daysSince>1?'s':'') + ' — RCA needed</span>'
+          : '<span style="display:inline-block;margin-top:4px;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#FFF7ED;color:#F97316">🟡 Recurred after ' + r.daysSince + ' day' + (r.daysSince>1?'s':'') + ' (last: Day ' + r.lastDay + ')</span>';
+        return '<div style="background:#fff;border-radius:8px;padding:11px;box-shadow:0 2px 10px rgba(0,0,0,.07);margin-bottom:7px;display:flex;gap:10px;border-left:4px solid ' + lc + '">'
+          +'<div style="font-size:11px;font-weight:900;color:' + lc + ';line-height:1;flex-shrink:0;width:32px;text-align:center;padding-top:2px">↩️</div>'
+          +'<div style="flex:1;min-width:0">'
+            +'<div style="font-size:12px;font-weight:700;margin-bottom:2px">' + h(r.lm) + '</div>'
+            +'<div style="font-size:11px;color:#64748B;line-height:1.4">' + h(r.fm) + '</div>'
+            + urgency
+          +'</div>'
+        +'</div>';
+      }).join('');
+    } else {
+      wkEl.style.display = 'none';
+    }
+  }
 
   document.getElementById('repList').innerHTML = filtReps.length
     ? filtReps.map(r => {
@@ -1115,6 +1200,33 @@ function renderFailures() {
   }).join('');
 
   badge('bdgFail', D.monthRepeats.length);
+
+  // Weekly repeat summary on month tab
+  var allWkReps = [];
+  var wkSeen = {};
+  D.availDays.forEach(function(d) {
+    ((D.weeklyRepeats && D.weeklyRepeats[d])||[]).forEach(function(r) {
+      var k = r.lm + '||' + r.fm;
+      if (!wkSeen[k]) { wkSeen[k] = {lm:r.lm,fm:r.fm,line:r.line,count:0,minDays:999}; allWkReps.push(wkSeen[k]); }
+      wkSeen[k].count++;
+      if (r.daysSince < wkSeen[k].minDays) wkSeen[k].minDays = r.daysSince;
+    });
+  });
+  var wkSumEl = document.getElementById('weeklyRepSummary');
+  if (wkSumEl) {
+    if (allWkReps.length) {
+      var critical = allWkReps.filter(function(r){ return r.minDays <= 3; });
+      wkSumEl.innerHTML = '<div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:10px;padding:10px 12px;margin-bottom:10px">'
+        +'<div style="font-size:12px;font-weight:700;color:#92400E;margin-bottom:2px">↩️ Weekly Repeat Pattern</div>'
+        +'<div style="font-size:11px;color:#B45309">'
+          + allWkReps.length + ' fault pattern' + (allWkReps.length>1?'s':'') + ' recurred within 7 days this month'
+          + (critical.length ? ' · <b>' + critical.length + ' came back in ≤3 days</b> — RCA incomplete' : '')
+        +'</div>'
+      +'</div>';
+    } else {
+      wkSumEl.innerHTML = '';
+    }
+  }
   document.getElementById('allRepCount').textContent=`${D.monthRepeats.length} patterns`;
   document.getElementById('allRepList').innerHTML = D.monthRepeats.map(r=>{
     const lc=LCOL[r.line]||'#EF4444';
