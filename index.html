@@ -832,15 +832,16 @@ function buildDaySelector() {
   const scroll = document.getElementById('dayScroll');
   scroll.innerHTML = D.availDays.map(d => {
     const isToday = d === TODAY_NUM;
-    const reps = (D.dayRepeats[d]||[]).length > 0;
+    const reps    = (D.dayRepeats[d]||[]).length > 0;
+    const hasWkly = (D.weeklyRepeats && D.weeklyRepeats[d] && D.weeklyRepeats[d].length > 0);
     const evCount = (D.byDay[d]||[]).length;
+    const redDot    = reps    ? '<div class="dp-dot"></div>' : '';
+    const orangeDot = hasWkly ? '<div style="width:4px;height:4px;border-radius:50%;background:#F97316"></div>' : '';
     return `<div class="day-pill${d===SEL_DAY?' active':''}${isToday?' today-pill':''}${reps?' has-repeats':''}"
       id="dp-${d}" onclick="selectDay(${d})">
       <div class="dp-num">${d}</div>
       <div style="display:flex;gap:2px;justify-content:center;margin-top:2px">
-        ${reps  ? '<div class="dp-dot"></div>' : ''}
-        ${wkly && !reps ? '<div style="width:4px;height:4px;border-radius:50%;background:#F97316"></div>' : ''}
-        ${wkly && reps  ? '<div style="width:4px;height:4px;border-radius:50%;background:#F97316"></div>' : ''}
+        ${redDot}${orangeDot}
       </div>
       <div class="dp-ev">${evCount>0?evCount+'ev':'-'}</div>
     </div>`;
@@ -909,10 +910,29 @@ function updateHeader() {
     +'</div>';
   }
   if (wkRep.length) {
-    bannerHtml += '<div class="alert-bar" style="background:#F97316;margin-top:4px">'
-      +'<div class="alert-txt">⚠️ ' + wkRep.length + ' fault' + (wkRep.length>1?'s':'') + ' recurring within 7 days</div>'
-      +'<div class="alert-n">' + wkRep.length + '</div>'
-    +'</div>';
+    var wkLines = wkRep.map(function(r) {
+      var icon = r.priority === 'critical' ? '🔴' : '🟡';
+      var mach = r.lm.replace('Pavan Line ','PVL').replace('Fava Line ','FVL').replace('Pavan SG','PVSG');
+      var fmShort = r.fm.length > 42 ? r.fm.slice(0,42) + '…' : r.fm;
+      return '<div style="display:flex;align-items:flex-start;gap:6px;margin-top:5px;padding-top:5px;border-top:1px solid rgba(255,255,255,0.2)">'
+        + icon + ' '
+        + '<div style="flex:1;min-width:0">'
+          + '<div style="font-size:11px;font-weight:800;color:#fff">' + h(mach) + '</div>'
+          + '<div style="font-size:10px;color:rgba(255,255,255,0.85);line-height:1.3">' + h(fmShort) + '</div>'
+        + '</div>'
+        + '<div style="flex-shrink:0;text-align:right;padding-left:6px">'
+          + '<div style="font-size:10px;font-weight:800;color:#fff">Day ' + r.lastDay + '</div>'
+          + '<div style="font-size:9px;color:rgba(255,255,255,0.8)">' + r.daysSince + 'd ago</div>'
+        + '</div>'
+      + '</div>';
+    }).join('');
+    bannerHtml += '<div class="alert-bar" style="background:#F97316;margin-top:4px;flex-direction:column;align-items:stretch">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between">'
+        + '<div class="alert-txt">↩️ ' + wkRep.length + ' fault' + (wkRep.length>1?'s':'') + ' recurring within 7 days — scroll down</div>'
+        + '<div class="alert-n">' + wkRep.length + '</div>'
+      + '</div>'
+      + wkLines
+    + '</div>';
   }
   ab.innerHTML = bannerHtml;
 }
